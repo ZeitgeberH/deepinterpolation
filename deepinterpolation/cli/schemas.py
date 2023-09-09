@@ -290,7 +290,7 @@ class GeneratorSchema(argschema.schemas.DefaultSchema):
             MultiContinuousTifGenerator.",
     )
 
-    y_shifts = argschema.fields.List(
+    y_shifts = argschema.fields.NumpyArray(
         required=False,
         default=[0],
         description="Y shifts used by the generator. \
@@ -298,7 +298,7 @@ class GeneratorSchema(argschema.schemas.DefaultSchema):
             MultiContinuousTifGenerator.",
     )
 
-    x_shifts = argschema.fields.List(
+    x_shifts = argschema.fields.NumpyArray(
         required=False,
         default=[0],
         description="X shifts used by the generator. \
