@@ -15,9 +15,10 @@ import tensorflow.keras as keras
 import tifffile
 import re
 import scanreader
+from pipeline import (reso, meso)
 from scipy import interpolate  as interp
 from deepinterpolation.generic import JsonLoader
-
+import datajoint as dj
 logger = logging.getLogger(__name__)
 logging.captureWarnings(True)
 logging.basicConfig(level=logging.INFO)
@@ -907,7 +908,10 @@ class ScanReadGenerator(SequentialGenerator):
     def __init__(self, json_path):
         "Initialization"
         super().__init__(json_path)
-
+        scan_id = self.json_data["scan_id"].split('_')
+        animal_id, session, scan_idx = int(scan_id[0]), int(scan_id[1]), int(scan_id[2])
+        scan_key = {'animal_id': animal_id, 'session': session, 'scan_idx': scan_idx}
+    
         self.raw_data = scanreader.read_scan(self.json_data["train_path"])
         ## this is very slow in k8s. Take >5 mins to read the shape for (1, 512, 512, 2, 60000)
         self.imageShape = self.raw_data.shape ## this help loading the data per scanreader
@@ -918,14 +922,19 @@ class ScanReadGenerator(SequentialGenerator):
         assert self.image_width == self.imageShape[2], "image width is not consistent with the data"
         self.field_id = self.json_data['field_id']
         self.channel_id = self.json_data['channel_id']
+        if len(reso.MotionCorrection() & scan_key & {'field':self.field_id}) >0:
+            pipe = reso
+        else:
+            pipe = meso
+        self.y_shifts, self.x_shifts = (pipe.MotionCorrection() & scan_key & {'field':self.field_id}).fetch1('y_shifts', 'x_shifts')
         self.total_frame_per_movie = self.json_data["total_frames"]
         self.apply_correction = self.json_data["apply_correction"] ## apply correction to the data
         self.raster_phase = self.json_data["raster_phase"]
         # Scan angle at which each pixel was recorded.
         max_angle = (np.pi / 2) * self.json_data["fill_fraction"]
         self.scan_angles = np.linspace(-max_angle, max_angle, self.image_width + 2)[1:-1]
-        self.y_shifts = self.json_data["y_shifts"]
-        self.x_shifts = self.json_data["x_shifts"]
+
+        
         self._update_end_frame(self.total_frame_per_movie)
         self._calculate_list_samples(self.total_frame_per_movie)
 

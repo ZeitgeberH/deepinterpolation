@@ -39,12 +39,12 @@ class FineTuning(argschema.ArgSchemaParser):
             self.args["finetuning_params"]["multi_gpus"]
         )
         ## data shape, facilitate training on multiple GPUs
-        if 'field_ids' in self.args["generator_params"]:
-            self.args["generator_params"]["field_ids"] = self.args["generator_params"]["field_ids"]
+        if 'field_id' in self.args["generator_params"]:
+            self.args["generator_params"]["field_id"] = self.args["generator_params"]["field_id"]
         if 'channel_id' in self.args["generator_params"]:
-            self.args["generator_params"]["channel_ids"] = self.args["generator_params"]["channel_id"]
+            self.args["generator_params"]["channel_id"] = self.args["generator_params"]["channel_id"]
         if 'image_hight' in self.args["generator_params"]:
-            self.args["generator_params"]["image_hight"] = self.args["generator_params"]["image_hight"]
+            self.args["generator_params"]["image_height"] = self.args["generator_params"]["image_height"]
         if 'image_width' in self.args["generator_params"]:
             self.args["generator_params"]["image_width"] = self.args["generator_params"]["image_width"]
         if 'total_frames' in self.args["generator_params"]:
@@ -53,10 +53,8 @@ class FineTuning(argschema.ArgSchemaParser):
             self.args["generator_params"]["raster_phase"] = self.args["generator_params"]["raster_phase"]
         if 'fill_fraction' in self.args["generator_params"]:
             self.args["generator_params"]["fill_fraction"] = self.args["generator_params"]["fill_fraction"]
-        if 'y_shifts' in self.args["generator_params"]:
-            self.args["generator_params"]["y_shifts"] = self.args["generator_params"]["y_shifts"]
-        if 'x_shifts' in self.args["generator_params"]:
-            self.args["generator_params"]["x_shifts"] = self.args["generator_params"]["x_shifts"]
+        if 'scan_id' in self.args["generator_params"]:
+            self.args["generator_params"]["scan_id"] = self.args["generator_params"]["scan_id"]
         if 'apply_correction' in self.args["generator_params"]:
             self.args["generator_params"]["apply_correction"] = self.args["generator_params"]["apply_correction"]
         # To be removed once fully transitioned to CLI

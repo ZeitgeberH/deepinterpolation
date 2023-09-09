@@ -149,6 +149,14 @@ class GeneratorSchema(argschema.schemas.DefaultSchema):
             MultiContinuousTifGenerator)",
     )
 
+    scan_id = argschema.fields.String(
+        required=True,
+        default="",
+        description="Scan id used to fetch data from the file. \
+            This is only relevant for MultiTifGenerator and \
+            MultiContinuousTifGenerator.",
+    )
+
     batch_size = argschema.fields.Int(
         required=False,
         default=5,
@@ -234,7 +242,7 @@ class GeneratorSchema(argschema.schemas.DefaultSchema):
         float32 which will double the caching memory requirements.",
     )
 
-    field_ids = argschema.fields.Int(
+    field_id = argschema.fields.Int(
         required=False,
         default=0,
         description="Field id used to fetch data from the file. \
@@ -242,7 +250,7 @@ class GeneratorSchema(argschema.schemas.DefaultSchema):
             MultiContinuousTifGenerator.",
     )
 
-    channel_ids = argschema.fields.Int(
+    channel_id = argschema.fields.Int(
         required=False,
         default=0,
         description="Channel id used to fetch data from the file. \
@@ -290,23 +298,13 @@ class GeneratorSchema(argschema.schemas.DefaultSchema):
             MultiContinuousTifGenerator.",
     )
 
-    y_shifts = argschema.fields.NumpyArray(
+    apply_correction = argschema.fields.Boolean(
         required=False,
-        default=[0],
-        description="Y shifts used by the generator. \
+        default=False,
+        description="Whether to apply motion correction. \
             This is only relevant for MultiTifGenerator and \
             MultiContinuousTifGenerator.",
     )
-
-    x_shifts = argschema.fields.NumpyArray(
-        required=False,
-        default=[0],
-        description="X shifts used by the generator. \
-            This is only relevant for MultiTifGenerator and \
-            MultiContinuousTifGenerator.",
-    )
-
-
 
     @mm.pre_load
     def generator_specific_settings(self, data, **kwargs):
