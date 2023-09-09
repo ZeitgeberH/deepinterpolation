@@ -38,7 +38,25 @@ class FineTuning(argschema.ArgSchemaParser):
         self.args["finetuning_params"]["nb_gpus"] = 2 * int(
             self.args["finetuning_params"]["multi_gpus"]
         )
-
+        ## data shape, facilitate training on multiple GPUs
+        if 'field_ids' in self.args["generator_params"]:
+            self.args["generator_params"]["field_ids"] = self.args["generator_params"]["field_ids"]
+        if 'channel_id' in self.args["generator_params"]:
+            self.args["generator_params"]["channel_ids"] = self.args["generator_params"]["channel_id"]
+        if 'image_hight' in self.args["generator_params"]:
+            self.args["generator_params"]["image_hight"] = self.args["generator_params"]["image_hight"]
+        if 'image_width' in self.args["generator_params"]:
+            self.args["generator_params"]["image_width"] = self.args["generator_params"]["image_width"]
+        if 'total_frames' in self.args["generator_params"]:
+            self.args["generator_params"]["total_frames"] = self.args["generator_params"]["total_frames"]
+        if 'raster_phase' in self.args["generator_params"]:
+            self.args["generator_params"]["raster_phase"] = self.args["generator_params"]["raster_phase"]
+        if 'fill_fraction' in self.args["generator_params"]:
+            self.args["generator_params"]["fill_fraction"] = self.args["generator_params"]["fill_fraction"]
+        if 'y_shifts' in self.args["generator_params"]:
+            self.args["generator_params"]["y_shifts"] = self.args["generator_params"]["y_shifts"]
+        if 'x_shifts' in self.args["generator_params"]:
+            self.args["generator_params"]["x_shifts"] = self.args["generator_params"]["x_shifts"]
         # To be removed once fully transitioned to CLI
         self.args["generator_params"]["train_path"] = self.args["generator_params"][
             "data_path"

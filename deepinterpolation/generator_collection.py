@@ -12,7 +12,8 @@ import numpy as np
 import tensorflow as tf
 import tensorflow.keras as keras
 import tifffile
-
+import re
+import scanreader
 from deepinterpolation.generic import JsonLoader
 
 logger = logging.getLogger(__name__)
@@ -895,6 +896,105 @@ class SingleTifGenerator(SequentialGenerator):
 
         return input_full, output_full
 
+class ScanReadGenerator(SequentialGenerator):
+    """This generator is used when dealing with a single tif file from scanread.
+    Each frame can be arbitrary (x,y) size but
+    should be consistent through training. a maximum of 1000 frames are pulled
+    from the beginning of the movie to estimate mean and std."""
+
+    def __init__(self, json_path):
+        "Initialization"
+        super().__init__(json_path)
+
+        self.raw_data = scanreader.read_scan(self.json_data["train_path"])
+        self.image_height = self.json_data["image_height"]
+        self.image_width = self.json_data["image_width"]
+        self.field_id = self.json_data['field_id']
+        self.channel_id = self.json_data['channel_id']
+        self.total_frame_per_movie = self.json_data["total_frames"]
+
+        self._update_end_frame(self.total_frame_per_movie)
+        self._calculate_list_samples(self.total_frame_per_movie)
+
+        average_nb_samples = np.min([self.total_frame_per_movie, 1000])
+        local_data = self.raw_data[0:average_nb_samples, :, :].flatten()
+        local_data = local_data.astype("float32")
+        self.local_mean = np.mean(local_data)
+        self.local_std = np.std(local_data)
+        self.epoch_index = 0
+
+    def __getitem__(self, index):
+        shuffle_indexes = self.generate_batch_indexes(index)
+
+        input_full = np.zeros(
+            [
+                self.batch_size,
+                self.image_height,
+                self.image_width,
+                self.pre_frame + self.post_frame,
+            ],
+            dtype="float32",
+        )
+        output_full = np.zeros(
+            [self.batch_size, self.image_height, self.image_width, 1],
+            dtype="float32",
+        )
+
+        for batch_index, frame_index in enumerate(shuffle_indexes):
+            X, Y = self.__data_generation__(frame_index)
+
+            input_full[batch_index, :, :, :] = X
+            output_full[batch_index, :, :, :] = Y
+
+        return input_full, output_full
+
+    def __data_generation__(self, index_frame):
+        "Generates data containing batch_size samples"
+
+        # X : (n_samples, *dim, n_channels)
+
+        input_full = np.zeros(
+            [
+                1,
+                self.image_height,
+                self.image_width,
+                self.pre_frame + self.post_frame,
+            ],
+            dtype="float32",
+        )
+        output_full = np.zeros(
+            [1, self.image_height, self.width, 1], dtype="float32"
+        )
+
+        input_index = np.arange(
+            index_frame - self.pre_frame - self.pre_post_omission,
+            index_frame + self.post_frame + self.pre_post_omission + 1,
+        )
+        input_index = input_index[input_index != index_frame]
+
+        for index_padding in np.arange(self.pre_post_omission + 1):
+            input_index = input_index[input_index != index_frame - index_padding]
+            input_index = input_index[input_index != index_frame + index_padding]
+
+        data_img_input = self.raw_data[self.field_id,:,:, self.channel_id, input_index]
+        data_img_output = self.raw_data[self.field_id,:,:, self.channel_id, index_frame]
+
+        data_img_input = np.swapaxes(data_img_input, 1, 2)
+        data_img_input = np.swapaxes(data_img_input, 0, 2)
+
+        img_in_shape = data_img_input.shape
+        img_out_shape = data_img_output.shape
+
+        data_img_input = (
+            data_img_input.astype("float32") - self.local_mean
+        ) / self.local_std
+        data_img_output = (
+            data_img_output.astype("float32") - self.local_mean
+        ) / self.local_std
+        input_full[0, : img_in_shape[0], : img_in_shape[1], :] = data_img_input
+        output_full[0, : img_out_shape[0], : img_out_shape[1], 0] = data_img_output
+
+        return input_full, output_full
 
 class OphysGenerator(SequentialGenerator):
     """This generator is used when dealing with a single hdf5 file storing a
@@ -1034,6 +1134,16 @@ class OphysGenerator(SequentialGenerator):
 
         return data_img_input, data_img_output
 
+def _correct_field(field, raster_phase, fill_fraction, x_shifts, y_shifts):
+    """ Correct a single field. Utility function used in some other functions above."""
+    field = field.astype(np.float32, copy=False)
+    if abs(raster_phase) > 1e-7:
+        field = galvo_corrections.correct_raster(field, raster_phase, fill_fraction) # raster
+    field  = galvo_corrections.correct_motion(field, x_shifts, y_shifts) # motion
+
+    return field
+
+
 class OphysGeneratorNPMM(SequentialGenerator):
     """This generator is used when dealing with a single numpy memmap file storing a
     continous movie recording into a 'data' field as [x,y, time] (old: [time, x, y]. 
@@ -1048,14 +1158,17 @@ class OphysGeneratorNPMM(SequentialGenerator):
             self.raw_data_file = self.json_data["train_path"]
         else:
             self.raw_data_file = self.json_data["movie_path"]
-
+        pattern=re.compile(r"H_\d+_W_\d+_nFrames_\d+")    
+        fn = self.raw_data_file.split('/')[-1]
+        dimInfo = pattern.findall(fn)[0].split('_')
+        H, W, nFrames = int(dimInfo[1]), int(dimInfo[3]), int(dimInfo[5])
         self.batch_size = self.json_data["batch_size"]
 
-        self.movie_obj = np.memmap(self.raw_data_file, mode='r', dtype="np.float32")
-        self.movie_obj = self.movie_obj.transpose(2,0,1)
+        self.movie_obj = np.memmap(self.raw_data_file, mode='r', shape=(H*W,nFrames), dtype="float32")
+        
 
-        self.movie_dim = self.movie_obj.shape[1:]
-        self.total_frame_per_movie = int(self.movie_obj.shape[0])
+        self.movie_dim = [H, W]
+        self.total_frame_per_movie = nFrames
 
         self._update_end_frame(self.total_frame_per_movie)
         self._calculate_list_samples(self.total_frame_per_movie)
@@ -1063,12 +1176,13 @@ class OphysGeneratorNPMM(SequentialGenerator):
             "movie_statistics_sample_size", 100
         )
         average_nb_samples = np.min(
-            [int(self.movie_obj.shape[0]), self.movie_statistics_sample_size]
+            [nFrames, self.movie_statistics_sample_size]
         )
 
         self.cache_data = False
     
-        local_data = self.movie_obj[0:average_nb_samples, :, :].flatten()
+        # local_data = self.movie_obj[0:average_nb_samples, :, :].flatten()
+        local_data = self.movie_obj[H*W, average_nb_samples].flatten()
         local_data = local_data.astype("float32")
 
         self.local_mean = np.mean(local_data)
@@ -1132,10 +1246,10 @@ class OphysGeneratorNPMM(SequentialGenerator):
             data_img_output = self.movie_obj[index_frame, :, :]
         else:
             data_img_input = (
-                self.movie_obj[input_index, :, :].astype("float") - self.local_mean
+                self.movie_obj[np.prod(self.movie_dim), input_index].reshape(self.movie_dim[0],self.movie_dim[1], self.batch_size, order='F') - self.local_mean
             ) / self.local_std
             data_img_output = (
-                self.movie_obj[index_frame, :, :].astype("float") - self.local_mean
+                self.movie_obj[np.prod(self.movie_dim), input_index].reshape(self.movie_dim[0],self.movie_dim[1], self.batch_size, order='F') - self.local_mean
             ) / self.local_std
 
         data_img_input = np.swapaxes(data_img_input, 1, 2)
@@ -1145,7 +1259,123 @@ class OphysGeneratorNPMM(SequentialGenerator):
         #     movie_obj_point.close()
 
         return data_img_input, data_img_output
+
+class OphysGeneratorDJ(SequentialGenerator):
+    """This generator is used when dealing with a single scanimage Tiff file storing a
+    continous movie recording into a 'data' field as [field_id, y/H, x/W, channel, frame_id] 
+    Each frame is expected to be smaller than (512,512)."""
+
+    def __init__(self, json_path: Union[str, Path]):
+        "Initialization"
+        super().__init__(json_path)
+
+        # For backward compatibility
+        if "train_path" in self.json_data.keys():
+            self.raw_data_file = self.json_data["train_path"]
+        else:
+            self.raw_data_file = self.json_data["movie_path"]
+        # pattern=re.compile(r"H_\d+_W_\d+_nFrames_\d+")    
+        # fn = self.raw_data_file.split('/')[-1]
+        # dimInfo = pattern.findall(fn)[0].split('_')
+        # H, W, nFrames = int(dimInfo[1]), int(dimInfo[3]), int(dimInfo[5])
+        # self.batch_size = self.json_data["batch_size"]
+
+        self.movie_obj = scanreader.read_scan(self.raw_data_file)
+        
+
+        self.movie_dim = [H, W]
+        self.total_frame_per_movie = nFrames
+
+        self._update_end_frame(self.total_frame_per_movie)
+        self._calculate_list_samples(self.total_frame_per_movie)
+        self.movie_statistics_sample_size = self.json_data.get(
+            "movie_statistics_sample_size", 100
+        )
+        average_nb_samples = np.min(
+            [nFrames, self.movie_statistics_sample_size]
+        )
+
+        self.cache_data = False
     
+        # local_data = self.movie_obj[0:average_nb_samples, :, :].flatten()
+        local_data = self.movie_obj[H*W, average_nb_samples].flatten()
+        local_data = local_data.astype("float32")
+
+        self.local_mean = np.mean(local_data)
+        self.local_std = np.std(local_data)
+
+
+        # movie_obj_point.close()
+
+    def __getitem__(self, index: int):
+        shuffle_indexes = self.generate_batch_indexes(index)
+        local_batch_size = shuffle_indexes.shape[0]
+        input_full = np.zeros(
+            [
+                local_batch_size,
+                self.movie_dim[0],
+                self.movie_dim[1],
+                self.pre_frame + self.post_frame,
+            ],
+            dtype="float32",
+        )
+
+        output_full = np.zeros(
+            [local_batch_size, self.movie_dim[0], self.movie_dim[1], 1], dtype="float32"
+        )
+
+        for batch_index, frame_index in enumerate(shuffle_indexes):
+            X, Y = self.__data_generation__(frame_index)
+            X_shape = X.shape
+            Y_shape = Y.shape
+
+            input_full[batch_index, : X_shape[0], : X_shape[1], :] = X
+            output_full[batch_index, : Y_shape[0], : Y_shape[1], 0] = Y
+
+        return input_full, output_full
+
+    def __data_generation__(self, index_frame: int):
+        "Generates data containing batch_size samples"
+
+        # if self.cache_data:
+        #     movie_obj = self.raw_data
+        # else:
+        #     # movie_obj_point = h5py.File(self.raw_data_file, "r")
+        #     # movie_obj = movie_obj_point["data"]
+        #     raw_data = np.memmap(self.raw_data_file, mode='r', dtype="np.float32")
+        #     raw_data = raw_data.transpose(2,0,1)
+
+        input_index = np.arange(
+            index_frame - self.pre_frame - self.pre_post_omission,
+            index_frame + self.post_frame + self.pre_post_omission + 1,
+        )
+        input_index = input_index[input_index != index_frame]
+
+        for index_padding in np.arange(self.pre_post_omission + 1):
+            input_index = input_index[input_index != index_frame - index_padding]
+            input_index = input_index[input_index != index_frame + index_padding]
+
+        # If data was cached we do not need to normalize. this was done
+        # at once to minimize compute
+        if self.cache_data:
+            data_img_input = self.movie_obj[input_index, :, :]
+            data_img_output = self.movie_obj[index_frame, :, :]
+        else:
+            data_img_input = (
+                self.movie_obj[np.prod(self.movie_dim), input_index].reshape(self.movie_dim[0],self.movie_dim[1], self.batch_size, order='F') - self.local_mean
+            ) / self.local_std
+            data_img_output = (
+                self.movie_obj[np.prod(self.movie_dim), input_index].reshape(self.movie_dim[0],self.movie_dim[1], self.batch_size, order='F') - self.local_mean
+            ) / self.local_std
+
+        data_img_input = np.swapaxes(data_img_input, 1, 2)
+        data_img_input = np.swapaxes(data_img_input, 0, 2)
+
+        # if not self.cache_data:
+        #     movie_obj_point.close()
+
+        return data_img_input, data_img_output
+      
 class InferenceOphysGenerator(SequentialGenerator):
     """This generator is a modified version of OphysGenerator that has
     been optimized when used for inference given randomize==False.
