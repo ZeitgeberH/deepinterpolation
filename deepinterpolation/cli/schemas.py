@@ -234,6 +234,80 @@ class GeneratorSchema(argschema.schemas.DefaultSchema):
         float32 which will double the caching memory requirements.",
     )
 
+    field_ids = argschema.fields.Int(
+        required=False,
+        default=0,
+        description="Field id used to fetch data from the file. \
+            This is only relevant for MultiTifGenerator and \
+            MultiContinuousTifGenerator.",
+    )
+
+    channel_ids = argschema.fields.Int(
+        required=False,
+        default=0,
+        description="Channel id used to fetch data from the file. \
+            This is only relevant for MultiTifGenerator and \
+            MultiContinuousTifGenerator.",
+    )
+
+    image_height = argschema.fields.Int(
+        required=False,
+        default=512,
+        description="Height of the image used by the generator. \
+            This is only relevant for MultiTifGenerator and \
+            MultiContinuousTifGenerator.",
+    )
+
+    image_width = argschema.fields.Int(
+        required=False,
+        default=512,
+        description="Width of the image used by the generator. \
+            This is only relevant for MultiTifGenerator and \
+            MultiContinuousTifGenerator.",
+    )
+
+    total_frames = argschema.fields.Int(
+        required=False,
+        default=10000,
+        description="Total number of frames in the dataset. \
+            This is only relevant for MultiTifGenerator and \
+            MultiContinuousTifGenerator.",
+    )
+
+    raster_phase = argschema.fields.Float(
+        required=False,
+        default=0.0,
+        description="Raster phase used by the generator. \
+            This is only relevant for MultiTifGenerator and \
+            MultiContinuousTifGenerator.",
+    )
+
+    fill_fraction = argschema.fields.Float(
+        required=False,
+        default=0.8,
+        description="Fill fraction used by the generator. \
+            This is only relevant for MultiTifGenerator and \
+            MultiContinuousTifGenerator.",
+    )
+
+    y_shifts = argschema.fields.List(
+        required=False,
+        default=[0],
+        description="Y shifts used by the generator. \
+            This is only relevant for MultiTifGenerator and \
+            MultiContinuousTifGenerator.",
+    )
+
+    x_shifts = argschema.fields.List(
+        required=False,
+        default=[0],
+        description="X shifts used by the generator. \
+            This is only relevant for MultiTifGenerator and \
+            MultiContinuousTifGenerator.",
+    )
+
+
+
     @mm.pre_load
     def generator_specific_settings(self, data, **kwargs):
         # This is for backward compatibility
