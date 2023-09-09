@@ -911,7 +911,11 @@ class ScanReadGenerator(SequentialGenerator):
         scan_id = self.json_data["scan_id"].split('_')
         animal_id, session, scan_idx = int(scan_id[0]), int(scan_id[1]), int(scan_id[2])
         scan_key = {'animal_id': animal_id, 'session': session, 'scan_idx': scan_idx}
-    
+        if len(reso.MotionCorrection() & scan_key & {'field':self.field_id}) >0:
+            pipe = reso
+        else:
+            pipe = meso
+        self.y_shifts, self.x_shifts = (pipe.MotionCorrection() & scan_key & {'field':self.field_id+1}).fetch1('y_shifts', 'x_shifts')
         self.raw_data = scanreader.read_scan(self.json_data["train_path"])
         ## this is very slow in k8s. Take >5 mins to read the shape for (1, 512, 512, 2, 60000)
         self.imageShape = self.raw_data.shape ## this help loading the data per scanreader
@@ -922,11 +926,8 @@ class ScanReadGenerator(SequentialGenerator):
         assert self.image_width == self.imageShape[2], "image width is not consistent with the data"
         self.field_id = self.json_data['field_id']
         self.channel_id = self.json_data['channel_id']
-        if len(reso.MotionCorrection() & scan_key & {'field':self.field_id}) >0:
-            pipe = reso
-        else:
-            pipe = meso
-        self.y_shifts, self.x_shifts = (pipe.MotionCorrection() & scan_key & {'field':self.field_id}).fetch1('y_shifts', 'x_shifts')
+        self.raw_data = self.raw_data[self.field_id, :, :, self.channel_id, :] ## only use the channel of interest
+
         self.total_frame_per_movie = self.json_data["total_frames"]
         self.apply_correction = self.json_data["apply_correction"] ## apply correction to the data
         self.raster_phase = self.json_data["raster_phase"]
@@ -939,7 +940,7 @@ class ScanReadGenerator(SequentialGenerator):
         self._calculate_list_samples(self.total_frame_per_movie)
 
         average_nb_samples = np.min([self.total_frame_per_movie, 1000])
-        local_data = self.raw_data[0:average_nb_samples, :, :].flatten()
+        local_data = self.raw_data[:,:,0:average_nb_samples].flatten()
         local_data = local_data.astype("float32")
         self.local_mean = np.mean(local_data)
         self.local_std = np.std(local_data)
@@ -1032,7 +1033,7 @@ class ScanReadGenerator(SequentialGenerator):
             index_frame - self.pre_frame - self.pre_post_omission,
             index_frame + self.post_frame + self.pre_post_omission + 1,
         )
-        data_field = self.raw_data[self.field_id,:,:, self.channel_id, input_index] ## get the data from the field and channel
+        data_field = self.raw_data[:,:, input_index] ## get the data from the field and channel
         if self.apply_correction:
             data_field = self._correct_field(data_field) ## apply correction to the data
         input_index = input_index[input_index != index_frame]
@@ -1041,8 +1042,8 @@ class ScanReadGenerator(SequentialGenerator):
             input_index = input_index[input_index != index_frame - index_padding]
             input_index = input_index[input_index != index_frame + index_padding]
 
-        data_img_input = data_field[self.field_id,:,:, self.channel_id, input_index]
-        data_img_output = data_field[self.field_id,:,:, self.channel_id, index_frame]
+        data_img_input = data_field[:,:, input_index]
+        data_img_output = data_field[:,:,  index_frame]
 
         data_img_input = np.swapaxes(data_img_input, 1, 2)
         data_img_input = np.swapaxes(data_img_input, 0, 2)
