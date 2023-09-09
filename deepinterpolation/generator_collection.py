@@ -5,7 +5,8 @@ import math
 import os
 from pathlib import Path
 from typing import Tuple, Union
-
+from scipy import signal
+from scipy import ndimage
 import h5py
 import nibabel as nib
 import numpy as np
@@ -14,6 +15,7 @@ import tensorflow.keras as keras
 import tifffile
 import re
 import scanreader
+from scipy import interpolate  as interp
 from deepinterpolation.generic import JsonLoader
 
 logger = logging.getLogger(__name__)
@@ -907,12 +909,23 @@ class ScanReadGenerator(SequentialGenerator):
         super().__init__(json_path)
 
         self.raw_data = scanreader.read_scan(self.json_data["train_path"])
+        ## this is very slow in k8s. Take >5 mins to read the shape for (1, 512, 512, 2, 60000)
+        self.imageShape = self.raw_data.shape ## this help loading the data per scanreader
+        print(f'scan shape: {self.imageShape}')
         self.image_height = self.json_data["image_height"]
         self.image_width = self.json_data["image_width"]
+        assert self.image_height == self.imageShape[1], "image height is not consistent with the data"
+        assert self.image_width == self.imageShape[2], "image width is not consistent with the data"
         self.field_id = self.json_data['field_id']
         self.channel_id = self.json_data['channel_id']
         self.total_frame_per_movie = self.json_data["total_frames"]
-
+        self.apply_correction = self.json_data["apply_correction"] ## apply correction to the data
+        self.raster_phase = self.json_data["raster_phase"]
+        # Scan angle at which each pixel was recorded.
+        max_angle = (np.pi / 2) * self.json_data["fill_fraction"]
+        self.scan_angles = np.linspace(-max_angle, max_angle, self.image_width + 2)[1:-1]
+        self.y_shifts = self.json_data["y_shifts"]
+        self.x_shifts = self.json_data["x_shifts"]
         self._update_end_frame(self.total_frame_per_movie)
         self._calculate_list_samples(self.total_frame_per_movie)
 
@@ -947,7 +960,47 @@ class ScanReadGenerator(SequentialGenerator):
             output_full[batch_index, :, :, :] = Y
 
         return input_full, output_full
+    
+    def _correct_field(self, field, frame_index):
+        if abs(self.raster_phase) > 1e-7:
+            field = self._correct_raster(field) # raster
+        field  = self._correct_motion(field, frame_index) # motion
+        return field
+    
+    def _correct_motion(self, field, frame_index):
+        for i, (y_shift, x_shift) in enumerate(zip(self.y_shifts[frame_index], self.x_shifts[frame_index])):
+            image = field[:, :, i].copy()
+            ndimage.interpolation.shift(image, (-y_shift, -x_shift), order=1,
+                                        output=field[:, :, i])
+        return field      
 
+    def _correct_raster(self, field):
+        for i in range(self.batch_size):
+            image = field[:,:,i]
+            ## even rows
+            interp_function = interp.interp1d(self.scan_angles, image[::2, :], bounds_error=False,
+                                          fill_value=0, copy=False)  
+            field[::2, :, i] = interp_function(self.scan_angles + self.raster_phase) 
+            ## odd rows
+            interp_function = interp.interp1d(self.scan_angles, image[1::2, :], bounds_error=False,
+                                          fill_value=0, copy=False)
+            field[1::2, :, i] = interp_function(self.scan_angles - self.raster_phase)
+        return field
+    
+    # def _correct_raster(self, field, raster_phase, fill_fraction):
+    #     """Correct for raster phase and fill fraction"""
+    #     nframes, ny, nx, nchannels = field.shape
+    #     if raster_phase != 0:
+    #         field = field[:, :, :, ::-1] if raster_phase < 0 else field
+    #         raster_phase = abs(raster_phase)
+    #         raster_phase = raster_phase % 1
+    #         if raster_phase > 0:
+    #             raster_phase = int(round(raster_phase * nx))
+    #             field = np.roll(field, raster_phase, axis=2)
+    #     if fill_fraction != 1:
+    #         field = field[:, :, : int(fill_fraction * nx), :]
+    #     return field
+    
     def __data_generation__(self, index_frame):
         "Generates data containing batch_size samples"
 
@@ -970,14 +1023,17 @@ class ScanReadGenerator(SequentialGenerator):
             index_frame - self.pre_frame - self.pre_post_omission,
             index_frame + self.post_frame + self.pre_post_omission + 1,
         )
+        data_field = self.raw_data[self.field_id,:,:, self.channel_id, input_index] ## get the data from the field and channel
+        if self.apply_correction:
+            data_field = self._correct_field(data_field) ## apply correction to the data
         input_index = input_index[input_index != index_frame]
 
         for index_padding in np.arange(self.pre_post_omission + 1):
             input_index = input_index[input_index != index_frame - index_padding]
             input_index = input_index[input_index != index_frame + index_padding]
 
-        data_img_input = self.raw_data[self.field_id,:,:, self.channel_id, input_index]
-        data_img_output = self.raw_data[self.field_id,:,:, self.channel_id, index_frame]
+        data_img_input = data_field[self.field_id,:,:, self.channel_id, input_index]
+        data_img_output = data_field[self.field_id,:,:, self.channel_id, index_frame]
 
         data_img_input = np.swapaxes(data_img_input, 1, 2)
         data_img_input = np.swapaxes(data_img_input, 0, 2)
@@ -1134,15 +1190,6 @@ class OphysGenerator(SequentialGenerator):
 
         return data_img_input, data_img_output
 
-def _correct_field(field, raster_phase, fill_fraction, x_shifts, y_shifts):
-    """ Correct a single field. Utility function used in some other functions above."""
-    field = field.astype(np.float32, copy=False)
-    if abs(raster_phase) > 1e-7:
-        field = galvo_corrections.correct_raster(field, raster_phase, fill_fraction) # raster
-    field  = galvo_corrections.correct_motion(field, x_shifts, y_shifts) # motion
-
-    return field
-
 
 class OphysGeneratorNPMM(SequentialGenerator):
     """This generator is used when dealing with a single numpy memmap file storing a
@@ -1274,15 +1321,13 @@ class OphysGeneratorDJ(SequentialGenerator):
             self.raw_data_file = self.json_data["train_path"]
         else:
             self.raw_data_file = self.json_data["movie_path"]
-        # pattern=re.compile(r"H_\d+_W_\d+_nFrames_\d+")    
-        # fn = self.raw_data_file.split('/')[-1]
-        # dimInfo = pattern.findall(fn)[0].split('_')
-        # H, W, nFrames = int(dimInfo[1]), int(dimInfo[3]), int(dimInfo[5])
-        # self.batch_size = self.json_data["batch_size"]
+        pattern=re.compile(r"H_\d+_W_\d+_nFrames_\d+")    
+        fn = self.raw_data_file.split('/')[-1]
+        dimInfo = pattern.findall(fn)[0].split('_')
+        H, W, nFrames = int(dimInfo[1]), int(dimInfo[3]), int(dimInfo[5])
+        self.batch_size = self.json_data["batch_size"]
 
         self.movie_obj = scanreader.read_scan(self.raw_data_file)
-        
-
         self.movie_dim = [H, W]
         self.total_frame_per_movie = nFrames
 

@@ -57,6 +57,8 @@ class FineTuning(argschema.ArgSchemaParser):
             self.args["generator_params"]["y_shifts"] = self.args["generator_params"]["y_shifts"]
         if 'x_shifts' in self.args["generator_params"]:
             self.args["generator_params"]["x_shifts"] = self.args["generator_params"]["x_shifts"]
+        if 'apply_correction' in self.args["generator_params"]:
+            self.args["generator_params"]["apply_correction"] = self.args["generator_params"]["apply_correction"]
         # To be removed once fully transitioned to CLI
         self.args["generator_params"]["train_path"] = self.args["generator_params"][
             "data_path"
