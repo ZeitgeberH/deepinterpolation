@@ -925,43 +925,42 @@ class ScanReadGenerator(SequentialGenerator):
         assert pipe is not None, 'scan {scan_key} not found in reso or meso pipeline'
 
         self.y_shifts, self.x_shifts = (pipe.MotionCorrection() & scan_key & {'field':self.field_id}).fetch1('y_shifts', 'x_shifts')
+        self.image_height = self.json_data["image_height"]
+        self.image_width = self.json_data["image_width"]
+        self.total_frame_per_movie = self.json_data["total_frames"]
+        self.total_frame_per_movie = 3000 # for testing purporse
         scan_handle = scanreader.read_scan(self.json_data["train_path"])
-        print('apply raster and motion correction...')
         t0 = pytimer.time()
-        self.raw_data = scan_handle[self.field_id-1,:,:, self.channel_id-1,:]
+        self.raw_data = scan_handle[self.field_id-1,:,:, self.channel_id-1, :self.total_frame_per_movie-1]
         t1 = pytimer.time()
-        print(f'{self.total_frame_per_movie} frames reading {(t1-t0)/60.0} mintues')
+        print(f'Reading H: {self.image_height} by W: {self.image_width} {self.total_frame_per_movie} frames reading {(t1-t0)/60.0} mintues')
         ## this is very slow in k8s. Take >5 mins to read the shape for (1, 512, 512, 2, 60000)
         # self.imageShape = self.raw_data.shape ## this help loading the data per scanreader
         # print(f'scan shape: {self.imageShape}')
-        self.image_height = self.json_data["image_height"]
-        self.image_width = self.json_data["image_width"]
+
         # assert self.image_height == self.imageShape[1], "image height is not consistent with the data"
         # assert self.image_width == self.imageShape[2], "image width is not consistent with the data"
 
         # self.raw_data = self.raw_data[self.field_id-1, :, :, self.channel_id-1, :] ## only use the channel of interest
         # print(f'raw data shape: {self.raw_data.shape}')
-        self.total_frame_per_movie = self.json_data["total_frames"]
+        
         self.apply_correction = self.json_data["apply_correction"] ## apply correction to the data
         self.raster_phase = self.json_data["raster_phase"]
         # Scan angle at which each pixel was recorded.
         max_angle = (np.pi / 2) * self.json_data["fill_fraction"]
         ## this is the vector to be interpolated
         self.scan_angles = np.linspace(-max_angle, max_angle, self.image_width + 2)[1:-1]
-        self.scan_angles_even =  self.scan_angles + self.raster_phase
-        self.scan_angles_odd =  self.scan_angles - self.raster_phase
+        self.scan_angles_even =  self.scan_angles + self.raster_phase ## even rows of image
+        self.scan_angles_odd =  self.scan_angles - self.raster_phase ## odd rows
         self._update_end_frame(self.total_frame_per_movie)
         self._calculate_list_samples(self.total_frame_per_movie)
         if self.apply_correction:
-            print('apply raster and motion correction...')
             t0 = pytimer.time()
             self._low_memory_motion_correction() ## apply correction to the data
             t1 = pytimer.time()
-            print(f'{self.total_frame_per_movie} frames takes {(t1-t0)/60.0} mintues')
-
+            print(f'Appying raster/motion corrections of {self.total_frame_per_movie} frames takes {(t1-t0)/60.0} mintues')
         average_nb_samples = np.min([self.total_frame_per_movie, 1000])
         local_data = self.raw_data[self.field_id-1,:,:,self.channel_id-1,0:average_nb_samples].flatten()
-        print('local data shape: ', local_data.shape)
         local_data = local_data.astype("float32")
         self.local_mean = np.mean(local_data)
         self.local_std = np.std(local_data)
