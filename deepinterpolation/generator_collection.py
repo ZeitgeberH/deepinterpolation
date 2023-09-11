@@ -939,6 +939,9 @@ class ScanReadGenerator(SequentialGenerator):
         
         self._update_end_frame(self.total_frame_per_movie)
         self._calculate_list_samples(self.total_frame_per_movie)
+        if self.apply_correction:
+            print('apply raster and motion correction...')
+            self._correct_field() ## apply correction to the data
 
         average_nb_samples = np.min([self.total_frame_per_movie, 1000])
         local_data = self.raw_data[self.field_id-1,:,:,self.channel_id-1,0:average_nb_samples].flatten()
@@ -973,31 +976,31 @@ class ScanReadGenerator(SequentialGenerator):
 
         return input_full, output_full
     
-    def _correct_field(self, field, frame_index):
+    def _correct_field(self):
+        ''' This is done in place, but has to be optimized to speed up!
+        '''
         if abs(self.raster_phase) > 1e-7:
-            field = self._correct_raster(field) # raster
-        field  = self._correct_motion(field, frame_index) # motion
-        return field
+            self._correct_raster() # raster
+        self._correct_motion() # motion
+  
     
-    def _correct_motion(self, field, frame_index):
-        for i, (y_shift, x_shift) in enumerate(zip(self.y_shifts[frame_index], self.x_shifts[frame_index])):
-            image = field[:, :, i].copy()
+    def _correct_motion(self):
+        for i, (y_shift, x_shift) in enumerate(zip(self.y_shifts, self.x_shifts)):
+            image = self.raw_data[self.field_id-1,:,:,self.channel_id-1,i].copy()
             ndimage.interpolation.shift(image, (-y_shift, -x_shift), order=1,
-                                        output=field[:, :, i])
-        return field      
+                                        output=self.raw_data[self.field_id-1,:,:,self.channel_id-1,i])   
 
-    def _correct_raster(self, field):
-        for i in range(self.batch_size):
-            image = field[:,:,i]
+    def _correct_raster(self):
+        for i in self.total_frame_per_movie:
+            image = self.raw_data[self.field_id-1,:,:,self.channel_id-1,i].copy()
             ## even rows
             interp_function = interp.interp1d(self.scan_angles, image[::2, :], bounds_error=False,
                                           fill_value=0, copy=False)  
-            field[::2, :, i] = interp_function(self.scan_angles + self.raster_phase) 
+            self.raw_data[self.field_id-1,::2, :,self.channel_id-1, i] = interp_function(self.scan_angles + self.raster_phase) 
             ## odd rows
             interp_function = interp.interp1d(self.scan_angles, image[1::2, :], bounds_error=False,
                                           fill_value=0, copy=False)
-            field[1::2, :, i] = interp_function(self.scan_angles - self.raster_phase)
-        return field
+            self.raw_data[self.field_id-1,1::2, :,self.channel_id-1, i] = interp_function(self.scan_angles - self.raster_phase)
     
     # def _correct_raster(self, field, raster_phase, fill_fraction):
     #     """Correct for raster phase and fill fraction"""
@@ -1028,24 +1031,22 @@ class ScanReadGenerator(SequentialGenerator):
             dtype="float32",
         )
         output_full = np.zeros(
-            [1, self.image_height, self.width, 1], dtype="float32"
+            [1, self.image_height, self.image_width, 1], dtype="float32"
         )
 
         input_index = np.arange(
             index_frame - self.pre_frame - self.pre_post_omission,
             index_frame + self.post_frame + self.pre_post_omission + 1,
         )
-        data_field = self.raw_data[self.field_id-1,:,:,self.channel_id-1,input_index] ## get the data from the field and channel
-        if self.apply_correction:
-            data_field = self._correct_field(data_field) ## apply correction to the data
+
         input_index = input_index[input_index != index_frame]
 
         for index_padding in np.arange(self.pre_post_omission + 1):
             input_index = input_index[input_index != index_frame - index_padding]
             input_index = input_index[input_index != index_frame + index_padding]
 
-        data_img_input = data_field[:,:, input_index]
-        data_img_output = data_field[:,:,  index_frame]
+        data_img_input = self.raw_data[self.field_id-1,:,:,self.channel_id-1, input_index] ## have target frame removed!
+        data_img_output = self.raw_data[self.field_id-1,:,:,self.channel_id-1, index_frame]
 
         data_img_input = np.swapaxes(data_img_input, 1, 2)
         data_img_input = np.swapaxes(data_img_input, 0, 2)
