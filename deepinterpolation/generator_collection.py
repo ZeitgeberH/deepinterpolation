@@ -20,7 +20,7 @@ from scipy import interpolate  as interp
 from deepinterpolation.generic import JsonLoader
 import datajoint as dj
 import time as pytimer
-
+from tqdm import tqdm
 
 logger = logging.getLogger(__name__)
 logging.captureWarnings(True)
@@ -922,7 +922,7 @@ class ScanReadGenerator(SequentialGenerator):
             pipe = meso
         else:
             pipe = None
-        assert pipe is not None, 'scan {scan_key} not found in reso or meso pipeline'
+        assert pipe is not None, f'scan {scan_key} not found in reso or meso pipeline'
 
         self.y_shifts, self.x_shifts = (pipe.MotionCorrection() & scan_key & {'field':self.field_id}).fetch1('y_shifts', 'x_shifts')
         self.image_height = self.json_data["image_height"]
@@ -960,7 +960,7 @@ class ScanReadGenerator(SequentialGenerator):
             t1 = pytimer.time()
             print(f'Appying raster/motion corrections of {self.total_frame_per_movie} frames takes {(t1-t0)/60.0} mintues')
         average_nb_samples = np.min([self.total_frame_per_movie, 1000])
-        local_data = self.raw_data[self.field_id-1,:,:,self.channel_id-1,0:average_nb_samples].flatten()
+        local_data = self.raw_data[:,:,0:average_nb_samples].flatten()
         local_data = local_data.astype("float32")
         self.local_mean = np.mean(local_data)
         self.local_std = np.std(local_data)
@@ -1009,7 +1009,7 @@ class ScanReadGenerator(SequentialGenerator):
         ):
 
             scan_fragment = self.raw_data[:, :, start_idx:end_idx]
-            if abs(raster_phase) > 1e-7:
+            if abs(self.raster_phase) > 1e-7:
                 scan_fragment = self._correct_raster(scan_fragment)  # raster
             scan_fragment = self._correct_motion(
                 scan_fragment, self.x_shifts[start_idx:end_idx], self.y_shifts[start_idx:end_idx]
@@ -1027,9 +1027,12 @@ class ScanReadGenerator(SequentialGenerator):
     
     def _correct_motion(self, field, xoffsets, yoffsets):
         for i, (y_shift, x_shift) in enumerate(zip(yoffsets, xoffsets)):
-            image = field[:,:, i].copy()
-            ndimage.interpolation.shift(image, (-y_shift, -x_shift), order=1,
-                                        output=field[:,:, i])
+            if i < field.shape[-1]:
+                image = field[:,:, i].copy()
+                ndimage.interpolation.shift(image, (-y_shift, -x_shift), order=1,
+                                            output=field[:,:, i])
+            else:
+                break
         return field   
 
     def _correct_raster(self, field):
@@ -1088,11 +1091,11 @@ class ScanReadGenerator(SequentialGenerator):
             input_index = input_index[input_index != index_frame - index_padding]
             input_index = input_index[input_index != index_frame + index_padding]
 
-        data_img_input = self.raw_data[self.field_id-1,:,:,self.channel_id-1, input_index] ## have target frame removed!
-        data_img_output = self.raw_data[self.field_id-1,:,:,self.channel_id-1, index_frame]
+        data_img_input = self.raw_data[:,:,input_index] ## have target frame removed!
+        data_img_output = self.raw_data[:,:,index_frame]
 
-        data_img_input = np.swapaxes(data_img_input, 1, 2)
-        data_img_input = np.swapaxes(data_img_input, 0, 2)
+        # data_img_input = np.swapaxes(data_img_input, 1, 2)
+        # data_img_input = np.swapaxes(data_img_input, 0, 2)
 
         img_in_shape = data_img_input.shape
         img_out_shape = data_img_output.shape
@@ -1103,6 +1106,7 @@ class ScanReadGenerator(SequentialGenerator):
         data_img_output = (
             data_img_output.astype("float32") - self.local_mean
         ) / self.local_std
+        # ValueError: could not broadcast input array from shape (512,60,512) into shape (512,60,60)
         input_full[0, : img_in_shape[0], : img_in_shape[1], :] = data_img_input
         output_full[0, : img_out_shape[0], : img_out_shape[1], 0] = data_img_output
 
