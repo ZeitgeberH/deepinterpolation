@@ -19,6 +19,9 @@ from pipeline import (reso, meso)
 from scipy import interpolate  as interp
 from deepinterpolation.generic import JsonLoader
 import datajoint as dj
+import time as pytimer
+
+
 logger = logging.getLogger(__name__)
 logging.captureWarnings(True)
 logging.basicConfig(level=logging.INFO)
@@ -915,10 +918,19 @@ class ScanReadGenerator(SequentialGenerator):
         self.channel_id = self.json_data['channel_id']
         if len(reso.MotionCorrection() & scan_key & {'field':self.field_id}) >0:
             pipe = reso
-        else:
+        elif len(meso.MotionCorrection() & scan_key & {'field':self.field_id}) >0:
             pipe = meso
+        else:
+            pipe = None
+        assert pipe is not None, 'scan {scan_key} not found in reso or meso pipeline'
+
         self.y_shifts, self.x_shifts = (pipe.MotionCorrection() & scan_key & {'field':self.field_id}).fetch1('y_shifts', 'x_shifts')
-        self.raw_data = scanreader.read_scan(self.json_data["train_path"])
+        scan_handle = scanreader.read_scan(self.json_data["train_path"])
+        print('apply raster and motion correction...')
+        t0 = pytimer.time()
+        self.raw_data = scan_handle[self.field_id-1,:,:, self.channel_id-1,:]
+        t1 = pytimer.time()
+        print(f'{self.total_frame_per_movie} frames reading {(t1-t0)/60.0} mintues')
         ## this is very slow in k8s. Take >5 mins to read the shape for (1, 512, 512, 2, 60000)
         # self.imageShape = self.raw_data.shape ## this help loading the data per scanreader
         # print(f'scan shape: {self.imageShape}')
@@ -934,14 +946,18 @@ class ScanReadGenerator(SequentialGenerator):
         self.raster_phase = self.json_data["raster_phase"]
         # Scan angle at which each pixel was recorded.
         max_angle = (np.pi / 2) * self.json_data["fill_fraction"]
+        ## this is the vector to be interpolated
         self.scan_angles = np.linspace(-max_angle, max_angle, self.image_width + 2)[1:-1]
-
-        
+        self.scan_angles_even =  self.scan_angles + self.raster_phase
+        self.scan_angles_odd =  self.scan_angles - self.raster_phase
         self._update_end_frame(self.total_frame_per_movie)
         self._calculate_list_samples(self.total_frame_per_movie)
         if self.apply_correction:
             print('apply raster and motion correction...')
-            self._correct_field() ## apply correction to the data
+            t0 = pytimer.time()
+            self._low_memory_motion_correction() ## apply correction to the data
+            t1 = pytimer.time()
+            print(f'{self.total_frame_per_movie} frames takes {(t1-t0)/60.0} mintues')
 
         average_nb_samples = np.min([self.total_frame_per_movie, 1000])
         local_data = self.raw_data[self.field_id-1,:,:,self.channel_id-1,0:average_nb_samples].flatten()
@@ -976,32 +992,60 @@ class ScanReadGenerator(SequentialGenerator):
 
         return input_full, output_full
     
-    def _correct_field(self):
-        ''' This is done in place, but has to be optimized to speed up!
-        '''
-        if abs(self.raster_phase) > 1e-7:
-            self._correct_raster() # raster
-        self._correct_motion() # motion
+    def _low_memory_motion_correction(self, chunk_size_in_GB = 1):
+        """
+        Runs an in memory version of our current motion correction found in
+        pipeline.utils.galvo_correction. This uses far less memory than the
+        parallel motion correction used in motion_correction_method=1.
+        """  
+        single_frame_size = self.raw_data[:, :, 0].nbytes
+        chunk_size = int(chunk_size_in_GB * 1024 ** 3 / (single_frame_size))
+
+        start_indices = np.arange(0, self.total_frame_per_movie, chunk_size)
+        if start_indices[-1] != self.total_frame_per_movie:
+            start_indices = np.insert(start_indices, len(start_indices), self.total_frame_per_movie)
+
+        for start_idx, end_idx in tqdm(
+            zip(start_indices[:-1], start_indices[1:]), total=len(start_indices) - 1
+        ):
+
+            scan_fragment = self.raw_data[:, :, start_idx:end_idx]
+            if abs(raster_phase) > 1e-7:
+                scan_fragment = self._correct_raster(scan_fragment)  # raster
+            scan_fragment = self._correct_motion(
+                scan_fragment, self.x_shifts[start_idx:end_idx], self.y_shifts[start_idx:end_idx]
+            )  # motion
+            self.raw_data[:, :, start_idx:end_idx] = scan_fragment
+
+
+    # def _correct_field(self):
+    #     ''' This is done in place, but has to be optimized to speed up!
+    #     '''
+    #     if abs(self.raster_phase) > 1e-7:
+    #         self._correct_raster() # raster
+    #     self._correct_motion() # motion
   
     
-    def _correct_motion(self):
-        for i, (y_shift, x_shift) in enumerate(zip(self.y_shifts, self.x_shifts)):
-            image = self.raw_data[self.field_id-1,:,:,self.channel_id-1,i].copy()
+    def _correct_motion(self, field, xoffsets, yoffsets):
+        for i, (y_shift, x_shift) in enumerate(zip(yoffsets, xoffsets)):
+            image = field[:,:, i].copy()
             ndimage.interpolation.shift(image, (-y_shift, -x_shift), order=1,
-                                        output=self.raw_data[self.field_id-1,:,:,self.channel_id-1,i])   
+                                        output=field[:,:, i])
+        return field   
 
-    def _correct_raster(self):
-        for i in self.total_frame_per_movie:
-            image = self.raw_data[self.field_id-1,:,:,self.channel_id-1,i].copy()
+    def _correct_raster(self, field):
+        for i in field.shape[-1]:
+            image = field[:,:, i].copy()
             ## even rows
             interp_function = interp.interp1d(self.scan_angles, image[::2, :], bounds_error=False,
                                           fill_value=0, copy=False)  
-            self.raw_data[self.field_id-1,::2, :,self.channel_id-1, i] = interp_function(self.scan_angles + self.raster_phase) 
+            field[::2, :, i] = interp_function(self.scan_angles_even) 
             ## odd rows
             interp_function = interp.interp1d(self.scan_angles, image[1::2, :], bounds_error=False,
                                           fill_value=0, copy=False)
-            self.raw_data[self.field_id-1,1::2, :,self.channel_id-1, i] = interp_function(self.scan_angles - self.raster_phase)
-    
+            field[1::2, :, i] = interp_function(self.scan_angles_odd)
+        return field
+
     # def _correct_raster(self, field, raster_phase, fill_fraction):
     #     """Correct for raster phase and fill fraction"""
     #     nframes, ny, nx, nchannels = field.shape
