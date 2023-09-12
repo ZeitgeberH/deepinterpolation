@@ -928,10 +928,9 @@ class ScanReadGenerator(SequentialGenerator):
         self.image_height = self.json_data["image_height"]
         self.image_width = self.json_data["image_width"]
         self.total_frame_per_movie = self.json_data["total_frames"]
-        self.total_frame_per_movie = 3000 # for testing purporse
         scan_handle = scanreader.read_scan(self.json_data["train_path"])
         t0 = pytimer.time()
-        self.raw_data = scan_handle[self.field_id-1,:,:, self.channel_id-1, :self.total_frame_per_movie-1]
+        self.raw_data = scan_handle[self.field_id-1,:,:, self.channel_id-1, :self.total_frame_per_movie]
         t1 = pytimer.time()
         print(f'Reading H: {self.image_height} by W: {self.image_width} {self.total_frame_per_movie} frames reading {(t1-t0)/60.0} mintues')
         ## this is very slow in k8s. Take >5 mins to read the shape for (1, 512, 512, 2, 60000)
