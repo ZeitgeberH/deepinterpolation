@@ -21,6 +21,8 @@ from deepinterpolation.generic import JsonLoader
 import datajoint as dj
 import time as pytimer
 from tqdm import tqdm
+import jax
+import jax.numpy as jnp
 
 logger = logging.getLogger(__name__)
 logging.captureWarnings(True)
@@ -1188,15 +1190,15 @@ class OphysGenerator(SequentialGenerator):
         input_full = np.zeros(
             [
                 local_batch_size,
-                self.movie_dim[0],
-                self.movie_dim[1],
+                512,
+                512,
                 self.pre_frame + self.post_frame,
             ],
             dtype="float32",
         )
 
         output_full = np.zeros(
-            [local_batch_size, self.movie_dim[0], self.movie_dim[1], 1], dtype="float32"
+            [local_batch_size, 512,512, 1], dtype="float32"
         )
 
         for batch_index, frame_index in enumerate(shuffle_indexes):
@@ -1240,7 +1242,8 @@ class OphysGenerator(SequentialGenerator):
             data_img_output = (
                 movie_obj[index_frame, :, :].astype("float") - self.local_mean
             ) / self.local_std
-
+        if data_img_input.shape[1] != 512 or data_img_input.shape[2] != 512:
+            data_img_input = jax.image.resize(images, (data_img_input.shape[0], 512,512), "bilinear")
         data_img_input = np.swapaxes(data_img_input, 1, 2)
         data_img_input = np.swapaxes(data_img_input, 0, 2)
 
