@@ -14,15 +14,15 @@ import tensorflow as tf
 import tensorflow.keras as keras
 import tifffile
 import re
-import scanreader
-from pipeline import (reso, meso)
 from scipy import interpolate  as interp
 from deepinterpolation.generic import JsonLoader
-import datajoint as dj
 import time as pytimer
 from tqdm import tqdm
-import jax
-import jax.numpy as jnp
+#import scanreader
+#from pipeline import (reso, meso)
+#import datajoint as dj
+#import jax
+#import jax.numpy as jnp
 
 logger = logging.getLogger(__name__)
 logging.captureWarnings(True)

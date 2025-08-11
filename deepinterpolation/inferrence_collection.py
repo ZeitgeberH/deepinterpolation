@@ -303,7 +303,15 @@ class core_inferrence:
         self.batch_size = self.generator_obj.batch_size
         self.nb_datasets = len(self.generator_obj)
         self.indiv_shape = self.generator_obj.get_output_size()
-        self._create_h5_datasets(self.output_dataset_name, self.raw_dataset_name)
+
+        
+        self.output_fileformat = Path(self.output_file).suffix[1:].lower()
+        assert self.output_fileformat in ['h5', 'tif'], (
+            f"Output file format {self.output_fileformat} not supported. "
+            "Supported formats are: h5, tif."
+        )
+        if self.output_fileformat == "h5":
+            self._create_h5_datasets(self.output_dataset_name, self.raw_dataset_name)
 
     def _get_first_output_index(self) -> int:
         """
@@ -387,6 +395,8 @@ class core_inferrence:
 
     def run(self):
         self.model = _load_model(self.json_data)
+        if self.output_fileformat == "tif":
+            tif_frames = [] ## list to save frame in memory
         for epoch_index, index_dataset in enumerate(tqdm(np.arange(self.nb_datasets))):
             local_data = self.generator_obj[index_dataset]
             # We overwrite epoch_index to allow the last unfilled epoch
@@ -407,8 +417,21 @@ class core_inferrence:
                     corrected_raw = local_data[1]
             else:
                 corrected_raw = None
+            if self.output_fileformat == "tif":
+                # Save the frames in memory
+                tif_frames.append(corrected_data)
+            else:
+                self._write_output_to_file(index_dataset, corrected_data, corrected_raw)
 
-            self._write_output_to_file(index_dataset, corrected_data, corrected_raw)
+        if self.output_fileformat == "tif":
+            print(f"Writing tif file to {self.output_file}")
+            tif_frames = np.concatenate(tif_frames, axis=0)
+            # Write the tif frames to file
+            from tifffile import imwrite
+            imwrite(
+                self.output_file,
+                tif_frames
+            )
 
     def run_multiprocessing(self):
         with multiprocessing.Manager() as mgr:
