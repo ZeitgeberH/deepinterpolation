@@ -695,6 +695,15 @@ class FineTuningSchema(argschema.schemas.DefaultSchema):
             samples could cause noise overfitting",
     )
 
+    initial_learning_rate = argschema.fields.Float(
+        required=False,
+        default=0.003,
+        description="base learning rate used by the optimizer at the \
+            beginning of the training. This is the learning rate used \
+            when the model is loaded from the checkpoint. The learning rate \
+            will be halved every <epochs_drop> epochs if \
+            apply_learning_decay is set to True.",
+    )
     learning_rate = argschema.fields.Float(
         required=False,
         default=0.0001,
